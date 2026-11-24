@@ -11,6 +11,13 @@ import { join } from 'node:path';
 const OUT_MAX = 65536;
 const STEP_MAX = 1000000;
 
+// Opcode metadata, built once at load so the hot loop does table lookups
+// instead of re-classifying every opcode: KN known, IM immediate bytes,
+// ND stack values needed, PS peak stack height, BN binary op.
+// [first, last, im, need, push, bin] per opcode range.
+const KN = new Uint8Array(256), IM = new Uint8Array(256), ND = new Uint8Array(256), PS = new Uint8Array(256), BN = new Uint8Array(256);
+for (const [a, b, im, nd, ps, bn] of [[0,0,0,0,0,0],[1,1,1,0,1,0],[2,2,4,0,1,0],[3,3,0,1,0,0],[4,4,0,1,2,0],[5,5,0,2,0,0],[6,6,0,2,3,0],[7,7,0,3,3,0],[0x10,0x16,0,2,1,1],[0x17,0x17,0,1,1,0],[0x18,0x1a,0,2,1,1],[0x1b,0x1b,0,1,1,0],[0x1c,0x22,0,2,1,1],[0x30,0x30,2,0,0,0],[0x31,0x32,2,1,0,0],[0x33,0x33,2,0,0,0],[0x34,0x34,0,0,0,0],[0x40,0x40,0,1,1,0],[0x41,0x41,0,2,0,0],[0x50,0x51,0,1,0,0],[0x52,0x52,0,0,1,0],[0x53,0x53,0,1,0,0]]) for (let o = a; o <= b; o++) { KN[o] = 1; IM[o] = im; ND[o] = nd; PS[o] = ps; BN[o] = bn; }
+
 function run(p, inp) {
   const n = p.length;
   const D = new Int32Array(256);
@@ -23,14 +30,13 @@ function run(p, inp) {
     if (st === STEP_MAX) return end(10);
     if (pc < 0 || pc >= n) return end(9);
     const op = p[pc];
-    const known = op <= 7 || (op >= 0x10 && op <= 0x22) || (op >= 0x30 && op <= 0x34) || (op >= 0x40 && op <= 0x41) || (op >= 0x50 && op <= 0x53);
-    if (!known) return end(5);
-    const im = op === 1 ? 1 : op === 2 ? 4 : op >= 0x30 && op <= 0x33 ? 2 : 0;
+    if (!KN[op]) return end(5);
+    const im = IM[op];
     if (pc + im >= n) return end(9);
     st++;
-    const bin = op >= 0x10 && op <= 0x22 && op !== 0x17 && op !== 0x1b;
-    const need = op === 7 ? 3 : op === 5 || op === 6 || op === 0x41 || bin ? 2 : op === 3 || op === 4 || op === 0x17 || op === 0x1b || op === 0x31 || op === 0x32 || op === 0x40 || op === 0x50 || op === 0x51 || op === 0x53 ? 1 : 0;
-    const push = op === 6 || op === 7 ? 3 : op === 4 ? 2 : op === 1 || op === 2 || op === 0x52 || bin || op === 0x17 || op === 0x1b || op === 0x40 ? 1 : 0;
+    const bin = BN[op];
+    const need = ND[op];
+    const push = PS[op];
     if (sp < need) return end(2);
     if (sp - need + push > 256) return end(3);
     pc += 1 + im;
